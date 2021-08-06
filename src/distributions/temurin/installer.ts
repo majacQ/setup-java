@@ -6,21 +6,20 @@ import path from 'path';
 import semver from 'semver';
 
 import { JavaBase } from '../base-installer';
-import { IAdoptAvailableVersions } from './models';
+import { ITemurinAvailableVersions } from './models';
 import { JavaDownloadRelease, JavaInstallerOptions, JavaInstallerResults } from '../base-models';
 import { extractJdkFile, getDownloadArchiveExtension, isVersionSatisfies } from '../../util';
 
-export enum AdoptImplementation {
-  Hotspot = 'Hotspot',
-  OpenJ9 = 'OpenJ9'
+export enum TemurinImplementation {
+  Hotspot = 'Hotspot'
 }
 
-export class AdoptDistribution extends JavaBase {
+export class TemurinDistribution extends JavaBase {
   constructor(
     installerOptions: JavaInstallerOptions,
-    private readonly jvmImpl: AdoptImplementation
+    private readonly jvmImpl: TemurinImplementation
   ) {
-    super(`Adopt-${jvmImpl}`, installerOptions);
+    super(`Temurin-${jvmImpl}`, installerOptions);
   }
 
   protected async findPackageForDownload(version: string): Promise<JavaDownloadRelease> {
@@ -28,8 +27,12 @@ export class AdoptDistribution extends JavaBase {
     const availableVersionsWithBinaries = availableVersionsRaw
       .filter(item => item.binaries.length > 0)
       .map(item => {
+        // normalize 17.0.0-beta+33.0.202107301459 to 17.0.0+33.0.202107301459 for earlier access versions
+        const formattedVersion = this.stable
+          ? item.version_data.semver
+          : item.version_data.semver.replace('-beta+', '+');
         return {
-          version: item.version_data.semver,
+          version: formattedVersion,
           url: item.binaries[0].package.link
         } as JavaDownloadRelease;
       });
@@ -78,26 +81,21 @@ export class AdoptDistribution extends JavaBase {
   }
 
   protected get toolcacheFolderName(): string {
-    if (this.jvmImpl === AdoptImplementation.Hotspot) {
-      // exclude Hotspot postfix from distribution name because Hosted runners have pre-cached Adopt OpenJDK under "Java_Adopt_jdk"
-      // for more information see: https://github.com/actions/setup-java/pull/155#discussion_r610451063
-      return `Java_Adopt_${this.packageType}`;
-    }
     return super.toolcacheFolderName;
   }
 
-  private async getAvailableVersions(): Promise<IAdoptAvailableVersions[]> {
+  private async getAvailableVersions(): Promise<ITemurinAvailableVersions[]> {
     const platform = this.getPlatformOption();
     const arch = this.architecture;
     const imageType = this.packageType;
     const versionRange = encodeURI('[1.0,100.0]'); // retrieve all available versions
     const releaseType = this.stable ? 'ga' : 'ea';
 
-    console.time('adopt-retrieve-available-versions');
+    console.time('temurin-retrieve-available-versions');
 
     const baseRequestArguments = [
       `project=jdk`,
-      'vendor=adoptopenjdk',
+      'vendor=adoptium',
       `heap_size=normal`,
       'sort_method=DEFAULT',
       'sort_order=DESC',
@@ -109,19 +107,19 @@ export class AdoptDistribution extends JavaBase {
     ].join('&');
 
     // need to iterate through all pages to retrieve the list of all versions
-    // Adopt API doesn't provide way to retrieve the count of pages to iterate so infinity loop
+    // Adoptium API doesn't provide way to retrieve the count of pages to iterate so infinity loop
     let page_index = 0;
-    const availableVersions: IAdoptAvailableVersions[] = [];
+    const availableVersions: ITemurinAvailableVersions[] = [];
     while (true) {
       const requestArguments = `${baseRequestArguments}&page_size=20&page=${page_index}`;
-      const availableVersionsUrl = `https://api.adoptopenjdk.net/v3/assets/version/${versionRange}?${requestArguments}`;
+      const availableVersionsUrl = `https://api.adoptium.net/v3/assets/version/${versionRange}?${requestArguments}`;
       if (core.isDebug() && page_index === 0) {
         // url is identical except page_index so print it once for debug
         core.debug(`Gathering available versions from '${availableVersionsUrl}'`);
       }
 
       const paginationPage = (
-        await this.http.getJson<IAdoptAvailableVersions[]>(availableVersionsUrl)
+        await this.http.getJson<ITemurinAvailableVersions[]>(availableVersionsUrl)
       ).result;
       if (paginationPage === null || paginationPage.length === 0) {
         // break infinity loop because we have reached end of pagination
@@ -134,7 +132,7 @@ export class AdoptDistribution extends JavaBase {
 
     if (core.isDebug()) {
       core.startGroup('Print information about available versions');
-      console.timeEnd('adopt-retrieve-available-versions');
+      console.timeEnd('temurin-retrieve-available-versions');
       console.log(`Available versions: [${availableVersions.length}]`);
       console.log(availableVersions.map(item => item.version_data.semver).join(', '));
       core.endGroup();
@@ -144,7 +142,7 @@ export class AdoptDistribution extends JavaBase {
   }
 
   private getPlatformOption(): string {
-    // Adopt has own platform names so need to map them
+    // Adoptium has own platform names so need to map them
     switch (process.platform) {
       case 'darwin':
         return 'mac';
